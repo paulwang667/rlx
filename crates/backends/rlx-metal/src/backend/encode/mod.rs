@@ -57,7 +57,22 @@ pub(crate) fn check_cmd_buf_status(cmd_buf: &metal::CommandBufferRef, where_: &s
 }
 
 impl MetalExecutable {
+    /// Drains the thread-local autorelease pool once per graph dispatch.
+    ///
+    /// The Metal encode path (compute/blit command encoders, MPSGraph feed
+    /// dictionaries, NSNumber/NSArray shape temporaries) allocates autoreleased
+    /// Objective-C objects that are only reclaimed when a pool drains. Under a
+    /// long stepwise AR loop (e.g. Qwen3-TTS talker, hundreds of decode steps
+    /// on a worker thread with no runloop) these accumulate for the entire
+    /// generation and drive resident memory into the tens of GB → OOM. Wrapping
+    /// each dispatch in a pool bounds the transient set to one call. This is the
+    /// single choke point for every synchronous run: `run_via_mps_graph` /
+    /// `run_via_mps_hybrid` / `encode_commit` are all reached from here.
     pub(crate) fn encode_and_run(&mut self) {
+        objc::rc::autoreleasepool(|| self.encode_and_run_inner());
+    }
+
+    fn encode_and_run_inner(&mut self) {
         if crate::thunk_profile::enabled() {
             self.run_thunk_profile();
             return;

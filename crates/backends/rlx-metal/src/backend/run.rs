@@ -67,24 +67,30 @@ impl MetalExecutable {
             Vec::with_capacity(input_sets.len());
 
         for inputs in input_sets {
-            // Write inputs into the shared arena. Subsequent commits will
-            // overwrite these — fine since each run's compute consumes
-            // its inputs before the next commit's writes.
-            for &(name, data) in inputs {
-                if let Some(&id) = self.input_ids.get(name)
-                    && self.arena.has_buffer(id)
-                {
-                    self.arena.write_from_f32(id, data);
+            // Drain autoreleased encode temporaries per commit so a large
+            // batch doesn't accumulate them across the whole loop. The
+            // retained `cmd_buf` (to_owned) and `dests` (owned Buffers)
+            // outlive the pool.
+            objc::rc::autoreleasepool(|| {
+                // Write inputs into the shared arena. Subsequent commits will
+                // overwrite these — fine since each run's compute consumes
+                // its inputs before the next commit's writes.
+                for &(name, data) in inputs {
+                    if let Some(&id) = self.input_ids.get(name)
+                        && self.arena.has_buffer(id)
+                    {
+                        self.arena.write_from_f32(id, data);
+                    }
                 }
-            }
-            // Allocate per-commit output buffers. Shared storage so the
-            // read-back at the end is just a pointer cast on Apple
-            // unified memory (no GPU→CPU copy).
-            let dests: Vec<metal::Buffer> =
-                out_sizes.iter().map(|&b| dev.alloc_shared(b)).collect();
-            if let Some(cmd_buf) = self.encode_commit(false, Some(&dests), None) {
-                pending.push((cmd_buf, dests));
-            }
+                // Allocate per-commit output buffers. Shared storage so the
+                // read-back at the end is just a pointer cast on Apple
+                // unified memory (no GPU→CPU copy).
+                let dests: Vec<metal::Buffer> =
+                    out_sizes.iter().map(|&b| dev.alloc_shared(b)).collect();
+                if let Some(cmd_buf) = self.encode_commit(false, Some(&dests), None) {
+                    pending.push((cmd_buf, dests));
+                }
+            });
         }
 
         // Single sync at the end. Metal queues are FIFO so waiting on the

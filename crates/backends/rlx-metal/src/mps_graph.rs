@@ -1559,6 +1559,8 @@ impl MpsGraph {
                 }
                 let td = mps_tensor_data_from_buffer(buf, off, shape, dtype);
                 let _: () = msg_send![feeds, setObject: td forKey: tensor.obj];
+                // `setObject:` retains td; drop our +1 from alloc/init.
+                let _: () = msg_send![td, release];
             }
 
             if trace {
@@ -1576,6 +1578,8 @@ impl MpsGraph {
                 }
                 let td = mps_tensor_data_from_buffer(buf, off, shape, dtype);
                 let _: () = msg_send![results_dict, setObject: td forKey: tensor.obj];
+                // `setObject:` retains td; drop our +1 from alloc/init.
+                let _: () = msg_send![td, release];
             }
 
             if trace {
@@ -1789,6 +1793,9 @@ impl MpsGraphExecutable {
                     feed_dtypes[i],
                 );
                 let _: () = msg_send![inputs, addObject: td];
+                // `addObject:` retains td; drop our +1 from alloc/init so the
+                // MPSGraphTensorData lives exactly as long as the array.
+                let _: () = msg_send![td, release];
             }
             let results: *mut Object = msg_send![arr_cls, array];
             for &i in &self.result_perm {
@@ -1799,6 +1806,9 @@ impl MpsGraphExecutable {
                     result_dtypes[i],
                 );
                 let _: () = msg_send![results, addObject: td];
+                // `addObject:` retains td; drop our +1 from alloc/init so the
+                // MPSGraphTensorData lives exactly as long as the array.
+                let _: () = msg_send![td, release];
             }
             // Retain so the arrays survive past the autorelease pool
             // boundary of this call.
@@ -1859,6 +1869,9 @@ impl MpsGraphExecutable {
                     feed_dtypes[i],
                 );
                 let _: () = msg_send![inputs, addObject: td];
+                // `addObject:` retains td; drop our +1 from alloc/init so the
+                // MPSGraphTensorData lives exactly as long as the array.
+                let _: () = msg_send![td, release];
             }
             let results: *mut Object = msg_send![arr_cls, array];
             for &i in &self.result_perm {
@@ -1869,6 +1882,9 @@ impl MpsGraphExecutable {
                     result_dtypes[i],
                 );
                 let _: () = msg_send![results, addObject: td];
+                // `addObject:` retains td; drop our +1 from alloc/init so the
+                // MPSGraphTensorData lives exactly as long as the array.
+                let _: () = msg_send![td, release];
             }
             let mps_cmd = crate::mps_blas::mps_command_buffer_wrap(cmd_buf);
             let _: () = msg_send![self.obj,
@@ -1908,6 +1924,9 @@ impl MpsGraphExecutable {
                     feed_dtypes[i],
                 );
                 let _: () = msg_send![inputs, addObject: td];
+                // `addObject:` retains td; drop our +1 from alloc/init so the
+                // MPSGraphTensorData lives exactly as long as the array.
+                let _: () = msg_send![td, release];
             }
             let results: *mut Object = msg_send![arr_cls, array];
             for &i in &self.result_perm {
@@ -1918,6 +1937,9 @@ impl MpsGraphExecutable {
                     result_dtypes[i],
                 );
                 let _: () = msg_send![results, addObject: td];
+                // `addObject:` retains td; drop our +1 from alloc/init so the
+                // MPSGraphTensorData lives exactly as long as the array.
+                let _: () = msg_send![td, release];
             }
 
             // `runWithMTLCommandQueue:inputsArray:resultsArray:executionDescriptor:`
@@ -2107,10 +2129,17 @@ unsafe fn mps_tensor_data_from_buffer(
                     view.is_null(),
                 );
             }
-            msg_send![alloc,
+            let td: *mut Object = msg_send![alloc,
             initWithMTLBuffer: view
             shape: nsshape
-            dataType: dtype]
+            dataType: dtype];
+            // `initWithMTLBuffer:` retains `view`; balance the +1 owned
+            // reference from `newBufferWithBytesNoCopy` so the wrapper
+            // MTLBuffer object is freed with `td` instead of leaking one
+            // per feed/result on every graph dispatch. (`[nil release]` is
+            // a no-op, so the null-view error path stays safe.)
+            let _: () = msg_send![view, release];
+            td
         }
     }
 }
